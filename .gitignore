@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.env
+*.env
+!*.env.example
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+dist/
+*.sqlite3
+*.sqlite3-*
