@@ -41,10 +41,6 @@ def tokenize(text: str, maximum: int = 6) -> list[str]:
     return out
 
 
-def escape_like(value: str) -> str:
-    return str(value).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def build_search_query(text: str, limit: int = 10, data_source_url: str = DATA_SOURCE_URL) -> tuple[str, list[Any]]:
     data_source_url = normalize_data_source_url(data_source_url)
     terms = tokenize(text) or [text.strip().lower()]
@@ -53,8 +49,8 @@ def build_search_query(text: str, limit: int = 10, data_source_url: str = DATA_S
     for term in terms:
         term_clauses = []
         for field in SEARCH_FIELDS:
-            term_clauses.append(f'"{field}" LIKE ? ESCAPE \'\\\'')
-            params.append(f"%{escape_like(term)}%")
+            term_clauses.append(f'instr(lower("{field}"), ?) > 0')
+            params.append(term)
         clauses.append("(" + " OR ".join(term_clauses) + ")")
     bounded = max(1, min(int(limit), 25))
     query = (
