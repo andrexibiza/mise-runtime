@@ -20,12 +20,14 @@ class RetrievalTests(unittest.TestCase):
         self.assertNotIn("agent", query)
         self.assertIn("LIMIT 7", query)
         self.assertEqual(params[-1], "Archived")
-        self.assertTrue(all(p == "%agent%" or p == "%memory%" for p in params[:-1]))
+        self.assertTrue(all(p == "agent" or p == "memory" for p in params[:-1]))
 
-    def test_search_treats_like_wildcards_as_literal_text(self):
+    def test_search_uses_literal_substring_matching_supported_by_notion_sql(self):
         query, params = build_search_query("%_")
-        self.assertIn("LIKE ? ESCAPE '\\'", query)
-        self.assertTrue(all(param == "%\\%\\_%" for param in params[:-1]))
+        self.assertIn('instr(lower("Memory Key"), ?) > 0', query)
+        self.assertNotIn("LIKE", query)
+        self.assertNotIn("ESCAPE", query)
+        self.assertTrue(all(param == "%_" for param in params[:-1]))
 
     def test_parse_nested_mcp_json(self):
         raw = json.dumps({"result": json.dumps({"results": [{"Name": "Mise"}], "has_more": False})})
