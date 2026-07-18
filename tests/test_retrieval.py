@@ -13,6 +13,26 @@ class RetrievalTests(unittest.TestCase):
     def test_tokenize_is_bounded_and_literal(self):
         self.assertEqual(tokenize("Mise / agent-memory, Agent memory!"), ["mise", "agent", "memory"])
 
+    def test_tokenize_reaches_subject_terms_in_natural_memory_questions(self):
+        query = (
+            "What is the exact Memory Key of the Mise record whose exact Name is "
+            "Agents Dashboard? Answer with only the Memory Key."
+        )
+        self.assertEqual(tokenize(query), ["agents", "dashboard"])
+
+    def test_tokenize_keeps_keyword_terms_when_query_only_ends_in_question_mark(self):
+        self.assertEqual(
+            tokenize("Mise / agent-memory, Agent memory?"),
+            ["mise", "agent", "memory"],
+        )
+
+    def test_tokenize_keeps_explicit_name_when_name_is_a_schema_word(self):
+        query = (
+            "What is the exact Memory Key of the Mise record whose exact Name is "
+            "Memory? Answer with only the Memory Key."
+        )
+        self.assertEqual(tokenize(query), ["memory"])
+
     def test_build_search_query_is_parameterized(self):
         query, params = build_search_query("agent memory", limit=7)
         self.assertIn('FROM "collection://00000000-0000-4000-8000-000000000001"', query)

@@ -9,6 +9,18 @@ DATA_SOURCE_PATTERN = re.compile(
     r"collection://[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
 SEARCH_FIELDS = ("Memory Key", "Name", "Aliases", "Recall When", "Abstract", "Agent Brief")
+QUESTION_FILLER = {
+    "a", "an", "answer", "can", "could", "did", "do", "does", "exact", "for", "from",
+    "how", "is", "key", "me", "memory", "mise", "name", "named", "of", "only", "please",
+    "record", "tell", "the", "to", "what", "when", "where", "which", "who", "whose", "with",
+    "would", "you",
+}
+BASIC_QUESTION_WORDS = {
+    "a", "an", "answer", "can", "could", "did", "do", "does", "for", "from", "how", "is",
+    "me", "of", "only", "please", "tell", "the", "to", "what", "when", "where", "which",
+    "who", "whose", "with", "would", "you",
+}
+QUESTION_OPENERS = {"can", "could", "do", "does", "how", "is", "what", "when", "where", "which", "who", "would"}
 RETRIEVAL_FIELDS = (
     "id", "url", "Name", "Memory Key", "Type", "Memory Types", "Status", "Abstract",
     "Agent Brief", "Recall When", "Authority", "Confidence", "Salience", "Sensitivity",
@@ -29,16 +41,25 @@ def normalize_data_source_url(value: str) -> str:
 
 
 def tokenize(text: str, maximum: int = 6) -> list[str]:
-    words = re.findall(r"[a-z0-9][a-z0-9_-]*", (text or "").lower())
-    out: list[str] = []
+    source = (text or "").lower()
+    words = re.findall(r"[a-z0-9][a-z0-9_-]*", source)
+    is_question = bool(words and words[0] in QUESTION_OPENERS)
+    explicit_name = re.search(r"\b(?:exact\s+)?name\s+is\s+([^?!.]+)", source) if is_question else None
+    if explicit_name:
+        words = re.findall(r"[a-z0-9][a-z0-9_-]*", explicit_name.group(1))
+
+    unique: list[str] = []
     for word in words:
         for part in word.replace("_", "-").split("-"):
-            if len(part) < 2 or part in out:
+            if len(part) < 2 or part in unique:
                 continue
-            out.append(part)
-            if len(out) >= maximum:
-                return out
-    return out
+            unique.append(part)
+
+    if is_question and not explicit_name:
+        subject = [part for part in unique if part not in QUESTION_FILLER]
+        unique = subject or [part for part in unique if part not in BASIC_QUESTION_WORDS]
+
+    return unique[:maximum]
 
 
 def build_search_query(text: str, limit: int = 10, data_source_url: str = DATA_SOURCE_URL) -> tuple[str, list[Any]]:
