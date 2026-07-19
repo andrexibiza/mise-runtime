@@ -45,6 +45,22 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["Memory Key"], "system:mise")
         self.assertEqual(result["results"][0]["url"], "https://notion.so/page-1")
 
+    def test_configured_data_source_cannot_be_overridden_by_request(self):
+        captured = []
+        entry = SimpleNamespace(
+            check_fn=lambda: True,
+            handler=lambda args: captured.append(args) or json.dumps({"results": []}),
+        )
+        client = NotionMCPClient("collection://00000000-0000-4000-8000-000000000001")
+
+        with patch("tools.registry.registry.get_entry", return_value=entry):
+            client.query({"data_source_id": "attacker-controlled", "page_size": 1})
+
+        self.assertEqual(
+            captured[0]["data_source_id"],
+            "00000000-0000-4000-8000-000000000001",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

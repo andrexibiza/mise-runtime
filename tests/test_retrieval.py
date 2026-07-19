@@ -102,6 +102,17 @@ class RetrievalTests(unittest.TestCase):
         parsed = parse_mcp_result(raw)
         self.assertEqual(parsed["results"][0]["Name"], "Mise")
 
+    def test_parse_mcp_content_envelope_with_metadata(self):
+        raw = {"results": [{"Name": "Mise"}], "has_more": False}
+        envelope = {
+            "content": [{"type": "text", "text": json.dumps(raw)}],
+            "isError": False,
+        }
+
+        parsed = parse_mcp_result(envelope)
+
+        self.assertEqual(parsed["results"][0]["Name"], "Mise")
+
     def test_decode_relation(self):
         raw = json.dumps(["https://app.notion.com/a", "https://app.notion.com/b"])
         self.assertEqual(decode_relation(raw), ["https://app.notion.com/a", "https://app.notion.com/b"])

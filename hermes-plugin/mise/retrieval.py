@@ -111,7 +111,11 @@ def parse_mcp_result(raw: Any) -> Any:
         if isinstance(value, dict) and set(value) == {"result"}:
             value = value["result"]
             continue
-        if isinstance(value, dict) and set(value) == {"content"} and isinstance(value["content"], list):
+        if (
+            isinstance(value, dict)
+            and isinstance(value.get("content"), list)
+            and value.get("isError") is not True
+        ):
             texts = [item.get("text", "") for item in value["content"] if isinstance(item, dict) and item.get("type") == "text"]
             if len(texts) == 1:
                 value = texts[0]

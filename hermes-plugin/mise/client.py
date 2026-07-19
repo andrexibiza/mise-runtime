@@ -25,8 +25,8 @@ class NotionMCPClient:
             raise RuntimeError(f"Notion MCP tool unavailable: {QUERY_TOOL}")
 
         arguments = {
-            "data_source_id": data_source_id_from_url(self.data_source_url),
             **request,
+            "data_source_id": data_source_id_from_url(self.data_source_url),
         }
         result = parse_mcp_result(entry.handler(arguments))
         if not isinstance(result, dict) or "results" not in result:
