@@ -106,7 +106,7 @@ Records marked `Archived` are excluded from automatic recall.
 ## Security
 
 - the data source must match the exact `collection://<UUID>` grammar;
-- caller text is passed as bound parameters and SQL wildcard characters are escaped;
+- caller text is placed only in native Notion `contains` filter values, never executable query language;
 - automatic recall is capped at four traceable records and 10,000 characters;
 - `is_available()` performs no network I/O;
 - initialization verifies the live MCP query path;

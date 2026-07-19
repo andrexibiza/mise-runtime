@@ -1,4 +1,4 @@
 name: mise
-version: 0.2.0
+version: 0.2.1
 description: "Automatic provenance-carrying recall from a Mise Notion graph through Hermes's native MemoryProvider lifecycle."
 pip_dependencies: []

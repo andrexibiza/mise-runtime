@@ -9,6 +9,14 @@ DATA_SOURCE_PATTERN = re.compile(
     r"collection://[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
 SEARCH_FIELDS = ("Memory Key", "Name", "Aliases", "Recall When", "Abstract", "Agent Brief")
+SEARCH_FIELD_TYPES = {
+    "Memory Key": "rich_text",
+    "Name": "title",
+    "Aliases": "rich_text",
+    "Recall When": "rich_text",
+    "Abstract": "rich_text",
+    "Agent Brief": "rich_text",
+}
 QUESTION_FILLER = {
     "a", "an", "answer", "can", "could", "did", "do", "does", "exact", "for", "from",
     "how", "is", "key", "me", "memory", "mise", "name", "named", "of", "only", "please",
@@ -29,15 +37,15 @@ RETRIEVAL_FIELDS = (
 )
 
 
-def _select_list() -> str:
-    return ", ".join(field if field in {"id", "url"} else f'"{field}"' for field in RETRIEVAL_FIELDS)
-
-
 def normalize_data_source_url(value: str) -> str:
     candidate = str(value or "").strip()
     if not DATA_SOURCE_PATTERN.fullmatch(candidate):
         raise ValueError("data_source_url must be collection:// followed by a UUID")
     return candidate.lower()
+
+
+def data_source_id_from_url(value: str) -> str:
+    return normalize_data_source_url(value).removeprefix("collection://")
 
 
 def tokenize(text: str, maximum: int = 6) -> list[str]:
@@ -62,26 +70,28 @@ def tokenize(text: str, maximum: int = 6) -> list[str]:
     return unique[:maximum]
 
 
-def build_search_query(text: str, limit: int = 10, data_source_url: str = DATA_SOURCE_URL) -> tuple[str, list[Any]]:
-    data_source_url = normalize_data_source_url(data_source_url)
+def build_search_request(text: str, limit: int = 10, data_source_url: str = DATA_SOURCE_URL) -> dict[str, Any]:
+    normalize_data_source_url(data_source_url)
     terms = tokenize(text) or [text.strip().lower()]
-    clauses: list[str] = []
-    params: list[Any] = []
+    clauses: list[dict[str, Any]] = []
     for term in terms:
-        term_clauses = []
+        term_clauses: list[dict[str, Any]] = []
         for field in SEARCH_FIELDS:
-            term_clauses.append(f'instr(lower("{field}"), ?) > 0')
-            params.append(term)
-        clauses.append("(" + " OR ".join(term_clauses) + ")")
+            term_clauses.append({
+                "property": field,
+                SEARCH_FIELD_TYPES[field]: {"contains": term},
+            })
+        clauses.append({"or": term_clauses})
+    clauses.extend([
+        {"property": "Status", "select": {"does_not_equal": "Archived"}},
+        {"property": "Memory Key", "rich_text": {"is_not_empty": True}},
+    ])
     bounded = max(1, min(int(limit), 25))
-    query = (
-        f'SELECT {_select_list()} FROM "{data_source_url}" WHERE '
-        + " AND ".join(clauses)
-        + f' AND "Status" != ? AND "Memory Key" IS NOT NULL AND "Memory Key" != \'\' '
-        + f'AND url IS NOT NULL AND url != \'\' ORDER BY "Updated" DESC LIMIT {bounded}'
-    )
-    params.append("Archived")
-    return query, params
+    return {
+        "filter": {"and": clauses},
+        "sorts": [{"property": "Updated", "direction": "descending"}],
+        "page_size": bounded,
+    }
 
 
 def parse_mcp_result(raw: Any) -> Any:
@@ -101,13 +111,61 @@ def parse_mcp_result(raw: Any) -> Any:
         if isinstance(value, dict) and set(value) == {"result"}:
             value = value["result"]
             continue
+        if isinstance(value, dict) and set(value) == {"content"} and isinstance(value["content"], list):
+            texts = [item.get("text", "") for item in value["content"] if isinstance(item, dict) and item.get("type") == "text"]
+            if len(texts) == 1:
+                value = texts[0]
+                continue
         return value
     return value
+
+
+def _plain_text(items: list[dict[str, Any]] | None) -> str:
+    return "".join(
+        item.get("plain_text") or item.get("text", {}).get("content") or ""
+        for item in (items or [])
+    )
+
+
+def _property_value(name: str, prop: dict[str, Any]) -> tuple[str, Any]:
+    kind = prop.get("type")
+    if kind in {"title", "rich_text"}:
+        return name, _plain_text(prop.get(kind))
+    if kind in {"select", "status"}:
+        return name, (prop.get(kind) or {}).get("name")
+    if kind == "multi_select":
+        return name, [item.get("name") for item in prop.get(kind) or []]
+    if kind == "relation":
+        return name, [item.get("id") for item in prop.get(kind) or []]
+    if kind == "date":
+        return f"date:{name}:start", (prop.get("date") or {}).get("start")
+    if kind in {"number", "checkbox", "url", "last_edited_time", "created_time"}:
+        return name, prop.get(kind)
+    return name, None
+
+
+def flatten_page(page: dict[str, Any]) -> dict[str, Any]:
+    row: dict[str, Any] = {"id": page.get("id"), "url": page.get("url")}
+    for name, prop in (page.get("properties") or {}).items():
+        key, value = _property_value(name, prop or {})
+        row[key] = value
+    return row
+
+
+def flatten_query_response(result: dict[str, Any]) -> dict[str, Any]:
+    rows = result.get("results")
+    if not isinstance(rows, list):
+        raise RuntimeError("Unexpected Notion query response")
+    out = dict(result)
+    out["results"] = [flatten_page(page) if isinstance(page, dict) and "properties" in page else page for page in rows]
+    return out
 
 
 def decode_relation(value: Any) -> list[str]:
     if not value:
         return []
+    if isinstance(value, list):
+        return [str(x) for x in value]
     parsed = parse_mcp_result(value)
     if isinstance(parsed, list):
         return [str(x) for x in parsed]
