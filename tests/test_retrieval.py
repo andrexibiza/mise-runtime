@@ -46,20 +46,17 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(request["page_size"], 7)
         self.assertEqual(request["sorts"], [{"property": "Updated", "direction": "descending"}])
         clauses = request["filter"]["and"]
-        self.assertEqual(len(clauses), 4)
+        self.assertEqual(len(clauses), 3)
         self.assertEqual(clauses[0]["or"][0], {
             "property": "Memory Key",
             "rich_text": {"contains": "agent"},
         })
         self.assertIn({"property": "Name", "title": {"contains": "memory"}}, clauses[1]["or"])
-        self.assertEqual(clauses[-2], {
-            "property": "Status",
-            "select": {"does_not_equal": "Archived"},
-        })
         self.assertEqual(clauses[-1], {
             "property": "Memory Key",
             "rich_text": {"is_not_empty": True},
         })
+        self.assertFalse(any(clause.get("property") == "Status" for clause in clauses))
 
     def test_literal_search_terms_are_values_not_query_language(self):
         request = build_search_request("%_")
@@ -96,6 +93,17 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(row["date:Last Verified:start"], "2026-07-19")
         self.assertEqual(row["Connections"], ["related-1"])
         self.assertEqual(row["Updated"], "2026-07-19T01:02:03Z")
+
+    def test_flatten_page_decodes_native_notion_status(self):
+        page = {
+            "id": "page-1",
+            "url": "https://notion.so/page-1",
+            "properties": {
+                "Status": {"type": "status", "status": {"name": "Archived"}},
+            },
+        }
+
+        self.assertEqual(flatten_page(page)["Status"], "Archived")
 
     def test_parse_nested_mcp_json(self):
         raw = json.dumps({"result": json.dumps({"results": [{"Name": "Mise"}], "has_more": False})})

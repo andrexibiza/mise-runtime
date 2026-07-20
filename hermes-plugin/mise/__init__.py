@@ -112,7 +112,12 @@ class MiseMemoryProvider(MemoryProvider):
     def _search(self, query: str, limit: int = 10):
         request = build_search_request(query, limit=limit, data_source_url=self.data_source_url)
         rows = self.client.query(request).get("results", [])
-        traceable = [row for row in rows if str(row.get("Memory Key") or "").strip() and str(row.get("url") or "").strip()]
+        traceable = [
+            row for row in rows
+            if str(row.get("Status") or "").strip().lower() != "archived"
+            and str(row.get("Memory Key") or "").strip()
+            and str(row.get("url") or "").strip()
+        ]
         return [compact_record(row) for row in rank_rows(traceable, query)[:limit]]
 
     def get_tool_schemas(self):
