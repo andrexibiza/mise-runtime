@@ -17,11 +17,11 @@ class FakeClient:
             "url": "https://notion.so/mise",
             "date:Last Verified:start": "2026-07-17",
         }]
-        self.last_query = ""
+        self.last_request = {}
 
-    def query(self, query, params):
-        self.last_query = query
-        return {"results": self.rows if '"Status" != ?' in query else []}
+    def query(self, request):
+        self.last_request = request
+        return {"results": self.rows if request.get("filter") else []}
 
 
 class AutoRecallTests(unittest.TestCase):
@@ -40,8 +40,11 @@ class AutoRecallTests(unittest.TestCase):
         self.assertIn("https://notion.so/mise", recall)
         self.assertIn("Origin: Human", recall)
         self.assertIn("Last verified: 2026-07-17", recall)
-        self.assertIn('"Memory Key" IS NOT NULL', client.last_query)
-        self.assertIn("url IS NOT NULL", client.last_query)
+        clauses = client.last_request["filter"]["and"]
+        self.assertIn({
+            "property": "Memory Key",
+            "rich_text": {"is_not_empty": True},
+        }, clauses)
 
     def test_prefetch_is_hard_bounded_and_drops_untraceable_records(self):
         huge = "x" * 1_000_000

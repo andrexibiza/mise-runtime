@@ -36,6 +36,16 @@ class OfficialPluginContractTests(unittest.TestCase):
         with patch.dict(os.environ, {"MISE_DATA_SOURCE_URL": "collection://00000000-0000-4000-8000-000000000001"}, clear=True):
             self.assertTrue(provider.is_available())
 
+    def test_initialize_fails_closed_when_path_home_is_unavailable(self):
+        provider = MiseMemoryProvider()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("mise.Path.home", side_effect=RuntimeError("home unavailable")):
+                provider.initialize("session-1")
+
+        self.assertFalse(provider.active)
+        self.assertEqual(provider.hermes_home, "")
+
     def test_setup_schema_declares_data_source(self):
         provider = MiseMemoryProvider()
         fields = {field["key"]: field for field in provider.get_config_schema()}
