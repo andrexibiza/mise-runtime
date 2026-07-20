@@ -67,6 +67,37 @@ class AutoRecallTests(unittest.TestCase):
         self.assertNotIn("Untraceable", recall)
         self.assertEqual(recall.count("Source: https://notion.so/record-"), 4)
 
+    def test_prefetch_excludes_archived_records_without_assuming_status_property_type(self):
+        rows = [
+            {
+                "Name": "Archived memory",
+                "Memory Key": "claim:archived",
+                "Status": "Archived",
+                "url": "https://notion.so/archived",
+            },
+            {
+                "Name": "Active memory",
+                "Memory Key": "claim:active",
+                "Status": "Active",
+                "url": "https://notion.so/active",
+            },
+        ]
+        client = FakeClient(rows)
+        provider = MiseMemoryProvider(
+            client,
+            "collection://00000000-0000-4000-8000-000000000001",
+        )
+        provider.active = True
+
+        recall = provider.prefetch("memory")
+
+        self.assertNotIn("Archived memory", recall)
+        self.assertIn("Active memory", recall)
+        self.assertFalse(any(
+            clause.get("property") == "Status"
+            for clause in client.last_request["filter"]["and"]
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

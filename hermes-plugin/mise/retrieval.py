@@ -83,7 +83,6 @@ def build_search_request(text: str, limit: int = 10, data_source_url: str = DATA
             })
         clauses.append({"or": term_clauses})
     clauses.extend([
-        {"property": "Status", "select": {"does_not_equal": "Archived"}},
         {"property": "Memory Key", "rich_text": {"is_not_empty": True}},
     ])
     bounded = max(1, min(int(limit), 25))

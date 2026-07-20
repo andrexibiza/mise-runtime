@@ -46,16 +46,12 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(request["page_size"], 7)
         self.assertEqual(request["sorts"], [{"property": "Updated", "direction": "descending"}])
         clauses = request["filter"]["and"]
-        self.assertEqual(len(clauses), 4)
+        self.assertEqual(len(clauses), 3)
         self.assertEqual(clauses[0]["or"][0], {
             "property": "Memory Key",
             "rich_text": {"contains": "agent"},
         })
         self.assertIn({"property": "Name", "title": {"contains": "memory"}}, clauses[1]["or"])
-        self.assertEqual(clauses[-2], {
-            "property": "Status",
-            "select": {"does_not_equal": "Archived"},
-        })
         self.assertEqual(clauses[-1], {
             "property": "Memory Key",
             "rich_text": {"is_not_empty": True},
