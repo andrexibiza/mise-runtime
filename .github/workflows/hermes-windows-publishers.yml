@@ -1,0 +1,110 @@
+name: Publish Hermes Windows fixes
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-windows-publisher-${{ github.event.pull_request.head.ref }}
+  cancel-in-progress: false
+
+jobs:
+  generation:
+    name: Publish process-generation barrier
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/run-hermes-generation-publisher' &&
+      github.event.pull_request.title == '[run] Publish Hermes Windows generation barrier'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ secrets.ARES_REVIEW_TOKEN }}
+    outputs:
+      head_sha: ${{ steps.publish.outputs.head_sha }}
+      pr_number: ${{ steps.publish.outputs.pr_number }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+      - name: Fetch hash-pinned publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            https://raw.githubusercontent.com/andrexibiza/start-ai-engineering/9e74422ea5263ac412019f93eb8e03009d055785/scripts/publish_hermes_windows_generation.py \
+            -o /tmp/publish_hermes_windows_generation.py
+          test "$(git hash-object /tmp/publish_hermes_windows_generation.py)" = e3029f0198d4020cba86c4ccd607f62a1c8b11d1
+      - name: Compose, test, publish, and reconcile topology
+        id: publish
+        run: python /tmp/publish_hermes_windows_generation.py
+
+  generation-windows:
+    name: Verify generation barrier on Windows
+    needs: generation
+    if: needs.generation.outputs.head_sha != ''
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ secrets.ARES_REVIEW_TOKEN }}
+      HEAD_SHA: ${{ needs.generation.outputs.head_sha }}
+      PR_NUMBER: ${{ needs.generation.outputs.pr_number }}
+    steps:
+      - name: Check out exact published head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/andrexibiza/hermes-agent.git C:/hermes
+          cd C:/hermes
+          git checkout --detach "${HEAD_SHA}"
+          test "$(git rev-parse HEAD)" = "${HEAD_SHA}"
+      - name: Run exact-head Windows gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd C:/hermes
+          python -m pip install --disable-pip-version-check -q pytest==9.1.1 psutil==7.2.2 python-dotenv==1.2.2 pyyaml==6.0.3 ruff==0.15.10
+          python -m py_compile hermes_cli/update_cmd.py hermes_cli/update_generation.py hermes_cli/update_generation_worker.py hermes_cli/update_lock.py hermes_cli/update_receipt.py tests/hermes_cli/test_update_gateway_runtime_intent.py tests/hermes_cli/test_update_generation.py tests/hermes_cli/test_update_lock.py tests/hermes_cli/test_update_receipt.py
+          python -m ruff check hermes_cli/update_cmd.py hermes_cli/update_generation.py hermes_cli/update_generation_worker.py hermes_cli/update_lock.py tests/hermes_cli/test_update_gateway_runtime_intent.py tests/hermes_cli/test_update_generation.py tests/hermes_cli/test_update_lock.py
+          HERMES_PYTHON="$(command -v python)" scripts/run_tests.sh tests/hermes_cli/test_update_gateway_runtime_intent.py tests/hermes_cli/test_update_generation.py tests/hermes_cli/test_update_lock.py tests/hermes_cli/test_update_receipt.py -q
+          python scripts/check-windows-footguns.py hermes_cli/update_cmd.py hermes_cli/update_generation.py hermes_cli/update_generation_worker.py hermes_cli/update_lock.py tests/hermes_cli/test_update_gateway_runtime_intent.py tests/hermes_cli/test_update_generation.py tests/hermes_cli/test_update_lock.py
+      - name: Post native-Windows receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue comment "${PR_NUMBER}" --repo NousResearch/hermes-agent --body "Native Windows exact-head verification passed for \`${HEAD_SHA}\` in [run ${GITHUB_RUN_ID}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}). Receipt covers generation, lock, update-receipt, stopped-gateway intent, compile, Ruff, and Windows-footgun gates. Upstream CI/Docker/Nix remain independently required."
+
+  plugin-probe:
+    name: Publish runtime-plugin probe fix
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/run-hermes-plugin-probe-publisher' &&
+      github.event.pull_request.title == '[run] Publish Hermes runtime-plugin probe fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ secrets.ARES_REVIEW_TOKEN }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@1e60f620b9541d1c2433e8f1a925dcfa90a5ab86 # v6.2.0
+        with:
+          node-version: '22.22.0'
+      - name: Fetch hash-pinned publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            https://raw.githubusercontent.com/andrexibiza/start-ai-engineering/9e74422ea5263ac412019f93eb8e03009d055785/scripts/publish_hermes_plugin_probe_fix.py \
+            -o /tmp/publish_hermes_plugin_probe_fix.py
+          test "$(git hash-object /tmp/publish_hermes_plugin_probe_fix.py)" = 5b121f4a8ccd356500f4373cfb9e2b1f3e08c50e
+      - run: python /tmp/publish_hermes_plugin_probe_fix.py
