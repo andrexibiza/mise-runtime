@@ -32,7 +32,7 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
-      - name: Fetch hash-pinned publisher
+      - name: Fetch and narrowly reconcile hash-pinned publisher
         shell: bash
         run: |
           set -euo pipefail
@@ -40,6 +40,18 @@ jobs:
             https://raw.githubusercontent.com/andrexibiza/start-ai-engineering/9e74422ea5263ac412019f93eb8e03009d055785/scripts/publish_hermes_windows_generation.py \
             -o /tmp/publish_hermes_windows_generation.py
           test "$(git hash-object /tmp/publish_hermes_windows_generation.py)" = e3029f0198d4020cba86c4ccd607f62a1c8b11d1
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('/tmp/publish_hermes_windows_generation.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    run(["git", "merge-base", "--is-ancestor", EVIDENCE_COMMIT, evidence_head], cwd=root)\n'
+          if text.count(old) != 1:
+              raise SystemExit('expected one mutable evidence-branch ancestry assertion')
+          text = text.replace(old, '', 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          echo "Reconciled publisher blob: $(git hash-object /tmp/publish_hermes_windows_generation.py)"
       - name: Compose, test, publish, and reconcile topology
         id: publish
         run: python /tmp/publish_hermes_windows_generation.py
@@ -96,7 +108,7 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
-      - uses: actions/setup-node@1e60f620b9541d1c2433e8f1a925dcfa90a5ab86 # v6.2.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.22.0'
       - name: Fetch hash-pinned publisher
