@@ -1,0 +1,296 @@
+name: Publish Hermes dependency-security graph
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-dependency-security-publisher
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Materialize exact dependency-security branch
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/run-hermes-dependency-security-publisher' &&
+      github.event.pull_request.title == '[run] Publish Hermes dependency-security graph'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.ARES_REVIEW_TOKEN }}
+      FORK_REPO: andrexibiza/hermes-agent
+      UPSTREAM_REPO: NousResearch/hermes-agent
+      TARGET_BRANCH: restack/pr89479-current-main
+      EXPECTED_TARGET_HEAD: 18eb288092b3230911454e822f10d93aef190d91
+      VERIFIED_BASE: 7d6db4efb885856078e4d19f804035226df81e0d
+      ARTIFACT_ID: '9469099811'
+      ARTIFACT_ZIP_SHA256: ba96d0e59014e0836f1fa0ccf5e3f1a81342f35c07bbb3e5a99e9f2fe27593f4
+      PACKAGE_LOCK_SHA256: 025cdcc245dbccda191c41c001a57f6aa9dfcaefa4ccc19aed418f28d918e84a
+      UV_LOCK_SHA256: c72c4fe0e636f971564432599f60257e040b0d3396061fe733610575a48aaaa3
+
+    steps:
+      - name: Check out publisher control plane
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.0
+
+      - name: Use repository-authorized npm
+        run: npm install --global npm@11.17.0
+
+      - name: Set up exact uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.12.5'
+          enable-cache: false
+
+      - name: Clone target and establish exact authorities
+        id: authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          root="${RUNNER_TEMP}/hermes-agent"
+          git clone --no-tags --single-branch --branch main "https://github.com/${FORK_REPO}.git" "$root"
+          cd "$root"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream "refs/heads/main:refs/remotes/upstream/main"
+          git fetch --no-tags origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          git cat-file -e "${VERIFIED_BASE}^{commit}"
+          git cat-file -e "${EXPECTED_TARGET_HEAD}^{commit}"
+
+          remote_target="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          test "$remote_target" = "$EXPECTED_TARGET_HEAD"
+
+          base_sha="$(git rev-parse refs/remotes/upstream/main)"
+          git merge-base --is-ancestor "$VERIFIED_BASE" "$base_sha"
+
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "Publishing onto upstream main $base_sha with target lease $remote_target"
+
+      - name: Reject dependency-input drift since verification base
+        shell: bash
+        env:
+          ROOT: ${{ steps.authority.outputs.root }}
+          BASE_SHA: ${{ steps.authority.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          cd "$ROOT"
+          git diff --name-only "$VERIFIED_BASE" "$BASE_SHA" > "${RUNNER_TEMP}/main-drift.txt"
+          python3 - <<'PY'
+          import pathlib
+          import re
+
+          changed = [
+              line.strip()
+              for line in pathlib.Path(
+                  __import__("os").environ["RUNNER_TEMP"] + "/main-drift.txt"
+              ).read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+          exact = {
+              ".npmrc",
+              "package.json",
+              "package-lock.json",
+              "uv.lock",
+              "pyproject.toml",
+              "uv.toml",
+              "apps/desktop/package.json",
+              "apps/desktop/scripts/packaged-app-layout.mjs",
+              "apps/desktop/scripts/packaged-app-layout.test.mjs",
+              "apps/desktop/scripts/test-desktop.mjs",
+          }
+          patterns = (
+              re.compile(r"(^|/)package(?:-lock)?\.json$"),
+              re.compile(r"(^|/)(?:pyproject\.toml|uv\.toml|uv\.lock)$"),
+              re.compile(r"(^|/)(?:requirements|constraints)[^/]*\.(?:txt|in)$"),
+          )
+          blocked = sorted(
+              path
+              for path in changed
+              if path in exact or any(pattern.search(path) for pattern in patterns)
+          )
+          print("Changes since verified base:")
+          print("\n".join(changed) if changed else "(none)")
+          if blocked:
+              raise SystemExit(
+                  "Dependency inputs moved after verification; regenerate instead of "
+                  "publishing stale graph:\n" + "\n".join(blocked)
+              )
+          PY
+
+      - name: Download and verify exact generated artifact
+        id: artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/dependency-security-restack.zip"
+          payload="${RUNNER_TEMP}/dependency-security-restack"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${UPSTREAM_REPO}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            > "$archive"
+          echo "${ARTIFACT_ZIP_SHA256}  ${archive}" | sha256sum --check -
+          mkdir -p "$payload"
+          unzip -q "$archive" -d "$payload"
+          echo "payload=$payload" >> "$GITHUB_OUTPUT"
+
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "dependency-security-restack"
+          expected = {
+              ".npmrc": "46e922c1fc1dd16ee9a1623a2b76d1f4e4a11ab03f225803beed058356535eda",
+              "package.json": "9cd7dd3823c2af968b66178efc7dc7f489ac9e72fd6dbaaa7e875494a6cd7e4d",
+              "package-lock.json": "025cdcc245dbccda191c41c001a57f6aa9dfcaefa4ccc19aed418f28d918e84a",
+              "uv.lock": "c72c4fe0e636f971564432599f60257e040b0d3396061fe733610575a48aaaa3",
+              "apps/desktop/package.json": "56f4cdb46f65a4a075e570f6acdad1f6c05fb903b37d9d01b1323842ef62bb2f",
+              "apps/desktop/scripts/packaged-app-layout.mjs": "9838203f20c16bdf38484cc605458bcd85181bbf2bcc37afbb076a5569a2f54f",
+              "apps/desktop/scripts/packaged-app-layout.test.mjs": "b1c90a8f0ca86f499985dd5e9837b27302eaf1af9f56671aabaaa530b4841d36",
+              "apps/desktop/scripts/test-desktop.mjs": "9dc343e3e40b6aad5c479f48b879afef8c243a8e3e87727d0f85d438af0cee61",
+          }
+          actual_files = {
+              path.relative_to(root).as_posix()
+              for path in root.rglob("*")
+              if path.is_file()
+          }
+          expected_files = set(expected) | {"SHA256SUMS"}
+          if actual_files != expected_files:
+              raise SystemExit(
+                  f"Artifact file set mismatch: expected {sorted(expected_files)}, "
+                  f"got {sorted(actual_files)}"
+              )
+          for relative, digest in expected.items():
+              actual = hashlib.sha256((root / relative).read_bytes()).hexdigest()
+              if actual != digest:
+                  raise SystemExit(
+                      f"{relative}: expected sha256 {digest}, got {actual}"
+                  )
+          print("Exact eight-file artifact graph verified.")
+          PY
+
+      - name: Materialize graph on live upstream main
+        shell: bash
+        env:
+          ROOT: ${{ steps.authority.outputs.root }}
+          BASE_SHA: ${{ steps.authority.outputs.base_sha }}
+          PAYLOAD: ${{ steps.artifact.outputs.payload }}
+        run: |
+          set -euo pipefail
+          cd "$ROOT"
+          git checkout --detach "$BASE_SHA"
+          while IFS= read -r path; do
+            mkdir -p "$(dirname "$path")"
+            cp "${PAYLOAD}/${path}" "$path"
+          done <<'EOF'
+          .npmrc
+          package.json
+          package-lock.json
+          uv.lock
+          apps/desktop/package.json
+          apps/desktop/scripts/packaged-app-layout.mjs
+          apps/desktop/scripts/packaged-app-layout.test.mjs
+          apps/desktop/scripts/test-desktop.mjs
+          EOF
+
+          test ! -e .github/scripts/restack_dependency_security.py
+          git show "${EXPECTED_TARGET_HEAD}:.github/scripts/restack_dependency_security.py" \
+            > .github/scripts/restack_dependency_security.py
+
+      - name: Reproduce lock graph and verify semantics
+        shell: bash
+        env:
+          ROOT: ${{ steps.authority.outputs.root }}
+        run: |
+          set -euo pipefail
+          cd "$ROOT"
+          npm install --package-lock-only --ignore-scripts --include=optional
+          npm update nanoid --package-lock-only --ignore-scripts --include=optional
+          echo "${PACKAGE_LOCK_SHA256}  package-lock.json" | sha256sum --check -
+
+          uv lock --upgrade-package 'h2==4.4.1'
+          echo "${UV_LOCK_SHA256}  uv.lock" | sha256sum --check -
+
+          python3 .github/scripts/restack_dependency_security.py verify
+          rm .github/scripts/restack_dependency_security.py
+          node --test apps/desktop/scripts/packaged-app-layout.test.mjs
+          uv lock --check
+          git diff --check
+
+          npm audit --workspaces=false --audit-level=high
+          npm audit --workspace web --audit-level=high
+          npm audit --workspace ui-tui --audit-level=high
+          npm audit --workspace apps/desktop --audit-level=high
+
+      - name: Commit exact eight-file graph
+        id: commit
+        shell: bash
+        env:
+          ROOT: ${{ steps.authority.outputs.root }}
+          BASE_SHA: ${{ steps.authority.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          cd "$ROOT"
+          expected="${RUNNER_TEMP}/expected-files.txt"
+          cat > "$expected" <<'EOF'
+          .npmrc
+          apps/desktop/package.json
+          apps/desktop/scripts/packaged-app-layout.mjs
+          apps/desktop/scripts/packaged-app-layout.test.mjs
+          apps/desktop/scripts/test-desktop.mjs
+          package-lock.json
+          package.json
+          uv.lock
+          EOF
+
+          git add --pathspec-from-file="$expected"
+          git diff --cached --name-only | sort > "${RUNNER_TEMP}/actual-files.txt"
+          diff -u "$expected" "${RUNNER_TEMP}/actual-files.txt"
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+
+          git fetch --no-tags upstream "refs/heads/main:refs/remotes/upstream/main"
+          test "$(git rev-parse refs/remotes/upstream/main)" = "$BASE_SHA"
+          test "$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')" = "$EXPECTED_TARGET_HEAD"
+
+          git diff --cached --check
+          git config user.name 'Axl Ibiza, MBA'
+          git config user.email 'andrexibiza@gmail.com'
+          git commit \
+            -m 'fix(deps): close current advisory graph on current main' \
+            -m $'Restack the active Electron, Nano ID, and h2 advisory remediation on the exact current main object while preserving the React Compiler graph and source attribution.\n\nCo-authored-by: schmitzi8 <schmitzi8@users.noreply.github.com>\nCo-authored-by: orcaspainting-dev <264355715+orcaspainting-dev@users.noreply.github.com>'
+
+          head_sha="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Publish with exact lease
+        shell: bash
+        env:
+          ROOT: ${{ steps.authority.outputs.root }}
+          HEAD_SHA: ${{ steps.commit.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          cd "$ROOT"
+          git push \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${EXPECTED_TARGET_HEAD}" \
+            origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          test "$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')" = "$HEAD_SHA"
+
+      - name: Publish upstream receipt
+        shell: bash
+        env:
+          HEAD_SHA: ${{ steps.commit.outputs.head_sha }}
+          BASE_SHA: ${{ steps.authority.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          gh pr comment 91906 --repo "$UPSTREAM_REPO" --body "Branch truth is now published at \`${HEAD_SHA}\`, parented directly on live upstream main \`${BASE_SHA}\`. Exact generated lock digests: \`package-lock.json ${PACKAGE_LOCK_SHA256}\`; \`uv.lock ${UV_LOCK_SHA256}\`. The publisher re-ran the pinned npm/uv generation, semantic verifier, x64/ARM64 layout regression, lock checks, diff checks, and all four npm audit scopes before the lease-guarded push. Publication run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Draft remains until exact-head upstream CI, Docker, Nix, and OSV evidence complete."
